@@ -683,12 +683,18 @@ func splitFileName(filename string) (name, ver, rel string, err error) {
 	ver = filename[verIndex+1 : relIndex]
 
 	name = filename[:verIndex]
+	if name == "" || ver == "" || rel == "" {
+		return "", "", "", xerrors.Errorf("unexpected source rpm file name with empty component: %q", filename)
+	}
 	if epochIndex := strings.Index(name, ":"); epochIndex != -1 {
 		epoch, parseErr := strconv.Atoi(name[:epochIndex])
 		if parseErr != nil || epochIndex == 0 {
 			return "", "", "", xerrors.Errorf("unexpected source rpm epoch in file name: %q", filename)
 		}
 		name = name[epochIndex+1:]
+		if name == "" {
+			return "", "", "", xerrors.Errorf("unexpected source rpm file name with empty component: %q", filename)
+		}
 		ver = fmt.Sprintf("%d:%s", epoch, ver)
 	}
 	return name, ver, rel, nil

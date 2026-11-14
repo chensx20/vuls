@@ -566,6 +566,26 @@ good 0 2 3 x86_64 good-2-3.src.rpm`)
 	}
 }
 
+func TestSplitFileNameRejectsEmptyComponents(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{name: "empty name", filename: "-1-1.src.rpm"},
+		{name: "empty version", filename: "foo--1.src.rpm"},
+		{name: "empty release", filename: "foo-1-.src.rpm"},
+		{name: "empty name after epoch", filename: "1:-1-1.src.rpm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, version, release, err := splitFileName(tt.filename)
+			if err == nil {
+				t.Errorf("splitFileName(%q) = %q, %q, %q, want error", tt.filename, name, version, release)
+			}
+		})
+	}
+}
+
 func Test_redhatBase_parseRpmQfLineMalformedSourceWarnsAndKeepsBinary(t *testing.T) {
 	o := &redhatBase{base: base{log: logging.NewIODiscardLogger()}}
 	pkg, ignored, err := o.parseRpmQfLine("bar 0 9 123 x86_64 elasticsearch-8.17.0-1-src.rpm")
