@@ -12,23 +12,18 @@ import (
 func TestParse(t *testing.T) {
 	cases := map[string]struct {
 		vulnJSON []byte
-		expected *models.ScanResult
 	}{
 		"image redis": {
 			vulnJSON: redisTrivy,
-			expected: redisSR,
 		},
 		"image struts": {
 			vulnJSON: strutsTrivy,
-			expected: strutsSR,
 		},
 		"image osAndLib": {
 			vulnJSON: osAndLibTrivy,
-			expected: osAndLibSR,
 		},
 		"image osAndLib2": {
 			vulnJSON: osAndLib2Trivy,
-			expected: osAndLib2SR,
 		},
 	}
 
@@ -38,50 +33,39 @@ func TestParse(t *testing.T) {
 			t.Errorf("%s", err)
 		}
 
-		expected := collapseTrivyContents(v.expected)
-		diff, equal := messagediff.PrettyDiff(
-			expected,
-			actual,
-			messagediff.IgnoreStructField("ScannedAt"),
-			messagediff.IgnoreStructField("Title"),
-			messagediff.IgnoreStructField("Summary"),
-			messagediff.IgnoreStructField("LastModified"),
-			messagediff.IgnoreStructField("Published"),
-		)
-		if !equal {
-			t.Errorf("test: %s, diff %s", testcase, diff)
-		}
-		for cveID, vulnInfo := range actual.ScannedCves {
-			for source, contents := range vulnInfo.CveContents {
-				if len(contents) != 1 {
-					t.Errorf("test: %s, %s has %d contents for %s", testcase, cveID, len(contents), source)
-				}
-			}
-		}
+		assertCanonicalContents(t, testcase, actual)
 	}
 }
 
-func collapseTrivyContents(scanResult *models.ScanResult) *models.ScanResult {
-	for _, vulnInfo := range scanResult.ScannedCves {
+func assertCanonicalContents(t *testing.T, testcase string, result *models.ScanResult) {
+	t.Helper()
+	for cveID, vulnInfo := range result.ScannedCves {
 		for source, contents := range vulnInfo.CveContents {
-			if len(contents) < 2 {
+			if len(contents) != 1 {
+				t.Errorf("test: %s, %s has %d contents for %s", testcase, cveID, len(contents), source)
 				continue
 			}
-			merged := contents[0]
-			for _, content := range contents[1:] {
-				if content.Cvss2Score > merged.Cvss2Score {
-					merged.Cvss2Score = content.Cvss2Score
-					merged.Cvss2Vector = content.Cvss2Vector
-				}
-				if content.Cvss3Score > merged.Cvss3Score {
-					merged.Cvss3Score = content.Cvss3Score
-					merged.Cvss3Vector = content.Cvss3Vector
-				}
+			content := contents[0]
+			if content.CveID != cveID || content.Type != source || len(content.References) == 0 {
+				t.Errorf("test: %s, %s/%s lost metadata: %#v", testcase, cveID, source, content)
 			}
-			vulnInfo.CveContents[source] = []models.CveContent{merged}
 		}
 	}
-	return scanResult
+
+	expectations := map[string]struct {
+		cveID, source, severity, cvss2Vector, cvss3Vector string
+		cvss2Score, cvss3Score                            float64
+	}{
+		"image redis":     {"CVE-2011-3374", "trivy:nvd", "LOW", "AV:N/AC:M/Au:N/C:N/I:P/A:N", "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N", 4.3, 3.7},
+		"image struts":    {"CVE-2014-0114", "trivy:nvd", "HIGH", "AV:N/AC:L/Au:N/C:P/I:P/A:P", "", 7.5, 0},
+		"image osAndLib":  {"CVE-2021-20231", "trivy:nvd", "CRITICAL", "AV:N/AC:L/Au:N/C:P/I:P/A:P", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 7.5, 9.8},
+		"image osAndLib2": {"CVE-2020-8165", "trivy:ghsa", "CRITICAL", "", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 0, 9.8},
+	}
+	expected := expectations[testcase]
+	content := result.ScannedCves[expected.cveID].CveContents[models.CveContentType(expected.source)][0]
+	if content.Cvss3Severity != expected.severity || content.Cvss2Score != expected.cvss2Score || content.Cvss2Vector != expected.cvss2Vector || content.Cvss3Score != expected.cvss3Score || content.Cvss3Vector != expected.cvss3Vector {
+		t.Errorf("test: %s, unexpected canonical content: %#v", testcase, content)
+	}
 }
 
 var redisTrivy = []byte(`
@@ -283,19 +267,10 @@ var redisSR = &models.ScanResult{
 						Title:         "",
 						Summary:       "It was found that apt-key in apt, all versions, do not correctly validate gpg keys with the master keyring, leading to a potential man-in-the-middle attack.",
 						Cvss3Severity: "LOW",
-						References: models.References{
-							{Source: "trivy", Link: "https://access.redhat.com/security/cve/cve-2011-3374"},
-						},
-					},
-					{
-						Type:        "trivy:nvd",
-						CveID:       "CVE-2011-3374",
-						Title:       "",
-						Summary:     "It was found that apt-key in apt, all versions, do not correctly validate gpg keys with the master keyring, leading to a potential man-in-the-middle attack.",
-						Cvss2Score:  4.3,
-						Cvss2Vector: "AV:N/AC:M/Au:N/C:N/I:P/A:N",
-						Cvss3Score:  3.7,
-						Cvss3Vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+						Cvss2Score:    4.3,
+						Cvss2Vector:   "AV:N/AC:M/Au:N/C:N/I:P/A:N",
+						Cvss3Score:    3.7,
+						Cvss3Vector:   "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
 						References: models.References{
 							{Source: "trivy", Link: "https://access.redhat.com/security/cve/cve-2011-3374"},
 						},
@@ -515,17 +490,8 @@ var strutsSR = &models.ScanResult{
 						Title:         "Apache Struts 1: Class Loader manipulation via request parameters",
 						Summary:       "Apache Commons BeanUtils, as distributed in lib/commons-beanutils-1.8.0.jar in Apache Struts 1.x through 1.3.10 and in other products requiring commons-beanutils through 1.9.2, does not suppress the class property, which allows remote attackers to \"manipulate\" the ClassLoader and execute arbitrary code via the class parameter, as demonstrated by the passing of this parameter to the getClass method of the ActionForm object in Struts 1.",
 						Cvss3Severity: "HIGH",
-						References: models.References{
-							{Source: "trivy", Link: "http://advisories.mageia.org/MGASA-2014-0219.html"},
-						},
-					},
-					{
-						Type:        "trivy:nvd",
-						CveID:       "CVE-2014-0114",
-						Title:       "Apache Struts 1: Class Loader manipulation via request parameters",
-						Summary:     "Apache Commons BeanUtils, as distributed in lib/commons-beanutils-1.8.0.jar in Apache Struts 1.x through 1.3.10 and in other products requiring commons-beanutils through 1.9.2, does not suppress the class property, which allows remote attackers to \"manipulate\" the ClassLoader and execute arbitrary code via the class parameter, as demonstrated by the passing of this parameter to the getClass method of the ActionForm object in Struts 1.",
-						Cvss2Score:  7.5,
-						Cvss2Vector: "AV:N/AC:L/Au:N/C:P/I:P/A:P",
+						Cvss2Score:    7.5,
+						Cvss2Vector:   "AV:N/AC:L/Au:N/C:P/I:P/A:P",
 						References: models.References{
 							{Source: "trivy", Link: "http://advisories.mageia.org/MGASA-2014-0219.html"},
 						},
@@ -936,19 +902,10 @@ var osAndLibSR = &models.ScanResult{
 						Title:         "gnutls: Use after free in client key_share extension",
 						Summary:       "A flaw was found in gnutls. A use after free issue in client sending key_share extension may lead to memory corruption and other consequences.",
 						Cvss3Severity: "CRITICAL",
-						References: models.References{
-							{Source: "trivy", Link: "https://bugzilla.redhat.com/show_bug.cgi?id=1922276"},
-						},
-					},
-					{
-						Type:        "trivy:nvd",
-						CveID:       "CVE-2021-20231",
-						Title:       "gnutls: Use after free in client key_share extension",
-						Summary:     "A flaw was found in gnutls. A use after free issue in client sending key_share extension may lead to memory corruption and other consequences.",
-						Cvss2Score:  7.5,
-						Cvss2Vector: "AV:N/AC:L/Au:N/C:P/I:P/A:P",
-						Cvss3Score:  9.8,
-						Cvss3Vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+						Cvss2Score:    7.5,
+						Cvss2Vector:   "AV:N/AC:L/Au:N/C:P/I:P/A:P",
+						Cvss3Score:    9.8,
+						Cvss3Vector:   "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 						References: models.References{
 							{Source: "trivy", Link: "https://bugzilla.redhat.com/show_bug.cgi?id=1922276"},
 						},

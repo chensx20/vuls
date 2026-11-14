@@ -277,6 +277,12 @@ func trivySeverityRank(severity string) int {
 }
 
 func mergeCvss(currentScore float64, currentVector string, incomingScore float64, incomingVector string) (float64, string) {
+	if currentVector != "" && incomingVector == "" {
+		return currentScore, currentVector
+	}
+	if currentVector == "" && incomingVector != "" {
+		return incomingScore, incomingVector
+	}
 	if incomingScore > currentScore || (incomingScore == currentScore && incomingVector < currentVector) {
 		return incomingScore, incomingVector
 	}

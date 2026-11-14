@@ -49,3 +49,10 @@ func TestConvertAggregatesContentBySource(t *testing.T) {
 		t.Fatalf("expected highest CVSS score, got %v", got)
 	}
 }
+
+func TestMergeCvssPreservesVectorWithLowerScore(t *testing.T) {
+	score, vector := mergeCvss(7.5, "CVSS:3.1/current", 9.8, "")
+	if score != 7.5 || vector != "CVSS:3.1/current" {
+		t.Fatalf("expected valid CVSS pair to be preserved, got %v/%q", score, vector)
+	}
+}
