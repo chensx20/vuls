@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/k0kubun/pp"
@@ -402,10 +403,32 @@ func Test_redhatBase_parseInstalledPackagesLine(t *testing.T) {
 				BinaryNames: []string{"community-mysql"},
 			},
 		},
+		{
+			name: "source epoch takes precedence",
+			args: args{line: "bar 2 9 123 x86_64 1:bar-9-123a.src.rpm bar:module"},
+			wantbp: &models.Package{
+				Name:            "bar",
+				Version:         "2:9",
+				Release:         "123",
+				Arch:            "x86_64",
+				ModularityLabel: "bar:module",
+			},
+			wantsp: &models.SrcPackage{
+				Name:        "bar",
+				Version:     "1:9-123a",
+				Arch:        "src",
+				BinaryNames: []string{"bar"},
+			},
+		},
+		{
+			name:   "malformed source keeps binary",
+			args:   args{line: "bar 2 9 123 x86_64 elasticsearch-8.17.0-1-src.rpm"},
+			wantbp: &models.Package{Name: "bar", Version: "2:9", Release: "123", Arch: "x86_64"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotbp, gotsp, err := (&redhatBase{}).parseInstalledPackagesLine(tt.args.line)
+			gotbp, gotsp, err := (&redhatBase{base: base{log: logging.NewIODiscardLogger()}}).parseInstalledPackagesLine(tt.args.line)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("redhatBase.parseInstalledPackagesLine() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -482,10 +505,32 @@ func Test_redhatBase_parseInstalledPackagesLineFromRepoquery(t *testing.T) {
 				BinaryNames: []string{"java-1.8.0-amazon-corretto"},
 			},
 		},
+		{
+			name: "source epoch takes precedence",
+			args: args{line: "bar 2 9 123 x86_64 1:bar-9-123a.src.rpm @repo"},
+			wantbp: &models.Package{
+				Name:       "bar",
+				Version:    "2:9",
+				Release:    "123",
+				Arch:       "x86_64",
+				Repository: "repo",
+			},
+			wantsp: &models.SrcPackage{
+				Name:        "bar",
+				Version:     "1:9-123a",
+				Arch:        "src",
+				BinaryNames: []string{"bar"},
+			},
+		},
+		{
+			name:   "malformed source keeps binary and repository",
+			args:   args{line: "bar 2 9 123 x86_64 elasticsearch-8.17.0-1-src.rpm @repo"},
+			wantbp: &models.Package{Name: "bar", Version: "2:9", Release: "123", Arch: "x86_64", Repository: "repo"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotbp, gotsp, err := (&redhatBase{}).parseInstalledPackagesLineFromRepoquery(tt.args.line)
+			gotbp, gotsp, err := (&redhatBase{base: base{log: logging.NewIODiscardLogger()}}).parseInstalledPackagesLineFromRepoquery(tt.args.line)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("redhatBase.parseInstalledPackagesLineFromRepoquery() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -497,6 +542,38 @@ func Test_redhatBase_parseInstalledPackagesLineFromRepoquery(t *testing.T) {
 				t.Errorf("redhatBase.parseInstalledPackagesLineFromRepoquery() gotsp = %v, wantsp %v", gotsp, tt.wantsp)
 			}
 		})
+	}
+}
+
+func Test_redhatBase_parseInstalledPackagesMalformedSourceContinues(t *testing.T) {
+	o := &redhatBase{base: base{
+		Distro: config.Distro{Family: constant.Alma, Release: "9.0"},
+		log:    logging.NewIODiscardLogger(),
+	}}
+	bins, srcs, err := o.parseInstalledPackages(`bad 0 1 1 x86_64 elasticsearch-8.17.0-1-src.rpm
+good 0 2 3 x86_64 good-2-3.src.rpm`)
+	if err != nil {
+		t.Fatalf("parseInstalledPackages() error = %v", err)
+	}
+	if _, ok := bins["bad"]; !ok {
+		t.Fatal("parseInstalledPackages() dropped binary package with malformed source")
+	}
+	if got := srcs["good"].Version; got != "2-3" {
+		t.Errorf("parseInstalledPackages() continued source parsing with version %q", got)
+	}
+	if len(o.warns) != 1 || !strings.Contains(o.warns[0].Error(), `binary package "bad"`) || !strings.Contains(o.warns[0].Error(), `source filename "elasticsearch-8.17.0-1-src.rpm"`) {
+		t.Errorf("parseInstalledPackages() warnings = %v", o.warns)
+	}
+}
+
+func Test_redhatBase_parseRpmQfLineMalformedSourceWarnsAndKeepsBinary(t *testing.T) {
+	o := &redhatBase{base: base{log: logging.NewIODiscardLogger()}}
+	pkg, ignored, err := o.parseRpmQfLine("bar 0 9 123 x86_64 elasticsearch-8.17.0-1-src.rpm")
+	if err != nil || ignored {
+		t.Fatalf("parseRpmQfLine() returned ignored=%v, err=%v", ignored, err)
+	}
+	if pkg == nil || pkg.Name != "bar" || len(o.warns) != 1 {
+		t.Fatalf("parseRpmQfLine() package=%v, warnings=%v", pkg, o.warns)
 	}
 }
 
