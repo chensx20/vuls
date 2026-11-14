@@ -575,6 +575,7 @@ func TestSplitFileNameRejectsEmptyComponents(t *testing.T) {
 		{name: "empty version", filename: "foo--1.src.rpm"},
 		{name: "empty release", filename: "foo-1-.src.rpm"},
 		{name: "empty name after epoch", filename: "1:-1-1.src.rpm"},
+		{name: "negative epoch", filename: "-1:bar-9-123a.src.rpm"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

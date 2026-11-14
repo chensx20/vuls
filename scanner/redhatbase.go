@@ -688,7 +688,7 @@ func splitFileName(filename string) (name, ver, rel string, err error) {
 	}
 	if epochIndex := strings.Index(name, ":"); epochIndex != -1 {
 		epoch, parseErr := strconv.Atoi(name[:epochIndex])
-		if parseErr != nil || epochIndex == 0 {
+		if parseErr != nil || epoch < 0 || epochIndex == 0 {
 			return "", "", "", xerrors.Errorf("unexpected source rpm epoch in file name: %q", filename)
 		}
 		name = name[epochIndex+1:]
