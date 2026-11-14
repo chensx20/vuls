@@ -577,33 +577,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
 func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, *models.SrcPackage, error) {
 	switch fields := strings.Fields(line); len(fields) {
 	case 6, 7:
-		sp, err := func() (*models.SrcPackage, error) {
-			switch fields[5] {
-			case "(none)":
-				return nil, nil
-			default:
-				n, v, r, err := splitFileName(fields[5])
-				if err != nil {
-					return nil, xerrors.Errorf("Failed to parse source rpm file. err: %w", err)
-				}
-				return &models.SrcPackage{
-					Name: n,
-					Version: func() string {
-						switch fields[1] {
-						case "0", "(none)":
-							return fmt.Sprintf("%s-%s", v, r)
-						default:
-							return fmt.Sprintf("%s:%s-%s", fields[1], v, r)
-						}
-					}(),
-					Arch:        "src",
-					BinaryNames: []string{fields[0]},
-				}, nil
-			}
-		}()
-		if err != nil {
-			return nil, nil, xerrors.Errorf("Failed to parse sourcepkg. err: %w", err)
-		}
+		sp := o.parseSourcePackage(fields[0], fields[1], fields[5])
 
 		return &models.Package{
 			Name: fields[0],
@@ -632,33 +606,7 @@ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, *
 func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*models.Package, *models.SrcPackage, error) {
 	switch fields := strings.Fields(line); len(fields) {
 	case 7:
-		sp, err := func() (*models.SrcPackage, error) {
-			switch fields[5] {
-			case "(none)":
-				return nil, nil
-			default:
-				n, v, r, err := splitFileName(fields[5])
-				if err != nil {
-					return nil, xerrors.Errorf("Failed to parse source rpm file. err: %w", err)
-				}
-				return &models.SrcPackage{
-					Name: n,
-					Version: func() string {
-						switch fields[1] {
-						case "0", "(none)":
-							return fmt.Sprintf("%s-%s", v, r)
-						default:
-							return fmt.Sprintf("%s:%s-%s", fields[1], v, r)
-						}
-					}(),
-					Arch:        "src",
-					BinaryNames: []string{fields[0]},
-				}, nil
-			}
-		}()
-		if err != nil {
-			return nil, nil, xerrors.Errorf("Failed to parse sourcepkg. err: %w", err)
-		}
+		sp := o.parseSourcePackage(fields[0], fields[1], fields[5])
 
 		return &models.Package{
 			Name: fields[0],
@@ -686,8 +634,35 @@ func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*mode
 	}
 }
 
+func (o *redhatBase) parseSourcePackage(binaryName, binaryEpoch, sourceFilename string) *models.SrcPackage {
+	if sourceFilename == "(none)" {
+		return nil
+	}
+
+	name, version, release, err := splitFileName(sourceFilename)
+	if err != nil {
+		warning := xerrors.Errorf("Failed to parse source rpm file for binary package %q, source filename %q: %w", binaryName, sourceFilename, err)
+		o.log.Warnf("%+v", warning)
+		o.warns = append(o.warns, warning)
+		return nil
+	}
+	if !strings.Contains(version, ":") && binaryEpoch != "0" && binaryEpoch != "(none)" {
+		version = fmt.Sprintf("%s:%s", binaryEpoch, version)
+	}
+
+	return &models.SrcPackage{
+		Name:        name,
+		Version:     fmt.Sprintf("%s-%s", version, release),
+		Arch:        "src",
+		BinaryNames: []string{binaryName},
+	}
+}
+
 // https://github.com/aquasecurity/trivy/blob/51f2123c5ccc4f7a37d1068830b6670b4ccf9ac8/pkg/fanal/analyzer/pkg/rpm/rpm.go#L212-L241
 func splitFileName(filename string) (name, ver, rel string, err error) {
+	if !strings.HasSuffix(filename, ".src.rpm") {
+		return "", "", "", xerrors.Errorf("unexpected source rpm file name. expected: %q, actual: %q", "<name>-<version>-<release>.src.rpm", filename)
+	}
 	filename = strings.TrimSuffix(filename, ".rpm")
 
 	archIndex := strings.LastIndex(filename, ".")
@@ -708,6 +683,20 @@ func splitFileName(filename string) (name, ver, rel string, err error) {
 	ver = filename[verIndex+1 : relIndex]
 
 	name = filename[:verIndex]
+	if name == "" || ver == "" || rel == "" {
+		return "", "", "", xerrors.Errorf("unexpected source rpm file name with empty component: %q", filename)
+	}
+	if epochIndex := strings.Index(name, ":"); epochIndex != -1 {
+		epoch, parseErr := strconv.Atoi(name[:epochIndex])
+		if parseErr != nil || epoch < 0 || epochIndex == 0 {
+			return "", "", "", xerrors.Errorf("unexpected source rpm epoch in file name: %q", filename)
+		}
+		name = name[epochIndex+1:]
+		if name == "" {
+			return "", "", "", xerrors.Errorf("unexpected source rpm file name with empty component: %q", filename)
+		}
+		ver = fmt.Sprintf("%d:%s", epoch, ver)
+	}
 	return name, ver, rel, nil
 }
 
