@@ -38,8 +38,9 @@ func TestParse(t *testing.T) {
 			t.Errorf("%s", err)
 		}
 
+		expected := collapseTrivyContents(v.expected)
 		diff, equal := messagediff.PrettyDiff(
-			v.expected,
+			expected,
 			actual,
 			messagediff.IgnoreStructField("ScannedAt"),
 			messagediff.IgnoreStructField("Title"),
@@ -50,7 +51,37 @@ func TestParse(t *testing.T) {
 		if !equal {
 			t.Errorf("test: %s, diff %s", testcase, diff)
 		}
+		for cveID, vulnInfo := range actual.ScannedCves {
+			for source, contents := range vulnInfo.CveContents {
+				if len(contents) != 1 {
+					t.Errorf("test: %s, %s has %d contents for %s", testcase, cveID, len(contents), source)
+				}
+			}
+		}
 	}
+}
+
+func collapseTrivyContents(scanResult *models.ScanResult) *models.ScanResult {
+	for _, vulnInfo := range scanResult.ScannedCves {
+		for source, contents := range vulnInfo.CveContents {
+			if len(contents) < 2 {
+				continue
+			}
+			merged := contents[0]
+			for _, content := range contents[1:] {
+				if content.Cvss2Score > merged.Cvss2Score {
+					merged.Cvss2Score = content.Cvss2Score
+					merged.Cvss2Vector = content.Cvss2Vector
+				}
+				if content.Cvss3Score > merged.Cvss3Score {
+					merged.Cvss3Score = content.Cvss3Score
+					merged.Cvss3Vector = content.Cvss3Vector
+				}
+			}
+			vulnInfo.CveContents[source] = []models.CveContent{merged}
+		}
+	}
+	return scanResult
 }
 
 var redisTrivy = []byte(`

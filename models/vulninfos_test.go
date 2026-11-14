@@ -335,6 +335,25 @@ func TestCountGroupBySeverity(t *testing.T) {
 	}
 }
 
+func TestCvss3ScoresConsolidatedSeverity(t *testing.T) {
+	vulnInfo := VulnInfo{
+		CveContents: CveContents{
+			"trivy:debian": {{Cvss3Severity: "LOW|MEDIUM"}},
+		},
+	}
+
+	scores := vulnInfo.Cvss3Scores()
+	if len(scores) != 1 {
+		t.Fatalf("expected one score, got %d", len(scores))
+	}
+	if scores[0].Value.Score != 6.9 {
+		t.Fatalf("expected medium score 6.9, got %v", scores[0].Value.Score)
+	}
+	if scores[0].Value.Severity != "LOW|MEDIUM" {
+		t.Fatalf("unexpected severity %q", scores[0].Value.Severity)
+	}
+}
+
 func TestToSortedSlice(t *testing.T) {
 	var tests = []struct {
 		in  VulnInfos

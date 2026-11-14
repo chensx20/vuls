@@ -3,6 +3,7 @@ package pkg
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	trivydbTypes "github.com/aquasecurity/trivy-db/pkg/types"
@@ -70,7 +71,8 @@ func Convert(results types.Results) (result *models.ScanResult, err error) {
 			}
 
 			for source, severity := range vuln.VendorSeverity {
-				vulnInfo.CveContents[models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))] = append(vulnInfo.CveContents[models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))], models.CveContent{
+				contentType := models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))
+				content := models.CveContent{
 					Type:          models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source)),
 					CveID:         vuln.VulnerabilityID,
 					Title:         vuln.Title,
@@ -79,11 +81,13 @@ func Convert(results types.Results) (result *models.ScanResult, err error) {
 					Published:     published,
 					LastModified:  lastModified,
 					References:    references,
-				})
+				}
+				mergeTrivyContent(vulnInfo.CveContents, contentType, content)
 			}
 
 			for source, cvss := range vuln.CVSS {
-				vulnInfo.CveContents[models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))] = append(vulnInfo.CveContents[models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))], models.CveContent{
+				contentType := models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source))
+				content := models.CveContent{
 					Type:         models.CveContentType(fmt.Sprintf("%s:%s", models.Trivy, source)),
 					CveID:        vuln.VulnerabilityID,
 					Title:        vuln.Title,
@@ -95,7 +99,8 @@ func Convert(results types.Results) (result *models.ScanResult, err error) {
 					Published:    published,
 					LastModified: lastModified,
 					References:   references,
-				})
+				}
+				mergeTrivyContent(vulnInfo.CveContents, contentType, content)
 			}
 
 			// do only if image type is Vuln
@@ -209,6 +214,109 @@ func Convert(results types.Results) (result *models.ScanResult, err error) {
 	scanResult.SrcPackages = srcPkgs
 	scanResult.LibraryScanners = libraryScanners
 	return scanResult, nil
+}
+
+func mergeTrivyContent(contents models.CveContents, contentType models.CveContentType, incoming models.CveContent) {
+	current, found := contents[contentType]
+	if !found {
+		contents[contentType] = []models.CveContent{incoming}
+		return
+	}
+
+	merged := current[0]
+	merged.Title = mergeString(merged.Title, incoming.Title)
+	merged.Summary = mergeString(merged.Summary, incoming.Summary)
+	merged.Cvss3Severity = mergeTrivySeverity(contentType, merged.Cvss3Severity, incoming.Cvss3Severity)
+	merged.Cvss2Score, merged.Cvss2Vector = mergeCvss(merged.Cvss2Score, merged.Cvss2Vector, incoming.Cvss2Score, incoming.Cvss2Vector)
+	merged.Cvss3Score, merged.Cvss3Vector = mergeCvss(merged.Cvss3Score, merged.Cvss3Vector, incoming.Cvss3Score, incoming.Cvss3Vector)
+	merged.Published = minTime(merged.Published, incoming.Published)
+	merged.LastModified = maxTime(merged.LastModified, incoming.LastModified)
+	merged.References = mergeReferences(merged.References, incoming.References)
+	contents[contentType] = []models.CveContent{merged}
+}
+
+func mergeTrivySeverity(contentType models.CveContentType, current, incoming string) string {
+	if incoming == "" {
+		return current
+	}
+	if current == "" {
+		return incoming
+	}
+	if contentType != models.CveContentType("trivy:debian") {
+		if trivySeverityRank(incoming) > trivySeverityRank(current) {
+			return incoming
+		}
+		return current
+	}
+
+	severities := map[string]struct{}{}
+	for _, severity := range append(strings.Split(current, "|"), strings.Split(incoming, "|")...) {
+		severities[severity] = struct{}{}
+	}
+	ordered := make([]string, 0, len(severities))
+	for severity := range severities {
+		ordered = append(ordered, severity)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := trivySeverityRank(ordered[i]), trivySeverityRank(ordered[j])
+		if left == right {
+			return ordered[i] < ordered[j]
+		}
+		return left < right
+	})
+	return strings.Join(ordered, "|")
+}
+
+func trivySeverityRank(severity string) int {
+	for rank, name := range trivydbTypes.SeverityNames {
+		if name == severity {
+			return rank
+		}
+	}
+	return 0
+}
+
+func mergeCvss(currentScore float64, currentVector string, incomingScore float64, incomingVector string) (float64, string) {
+	if incomingScore > currentScore || (incomingScore == currentScore && incomingVector < currentVector) {
+		return incomingScore, incomingVector
+	}
+	return currentScore, currentVector
+}
+
+func mergeString(current, incoming string) string {
+	if current == "" || (incoming != "" && incoming < current) {
+		return incoming
+	}
+	return current
+}
+
+func minTime(current, incoming time.Time) time.Time {
+	if current.IsZero() || (!incoming.IsZero() && incoming.Before(current)) {
+		return incoming
+	}
+	return current
+}
+
+func maxTime(current, incoming time.Time) time.Time {
+	if incoming.After(current) {
+		return incoming
+	}
+	return current
+}
+
+func mergeReferences(current, incoming models.References) models.References {
+	byLink := map[string]models.Reference{}
+	for _, reference := range append(current, incoming...) {
+		byLink[reference.Link] = reference
+	}
+	merged := make(models.References, 0, len(byLink))
+	for _, reference := range byLink {
+		merged = append(merged, reference)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Link < merged[j].Link
+	})
+	return merged
 }
 
 func isTrivySupportedOS(family ftypes.TargetType) bool {
