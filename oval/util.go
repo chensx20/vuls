@@ -201,6 +201,12 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
 		select {
 		case res := <-resChan:
 			for _, def := range res.defs {
+				if res.request.isSrcPack && ovalFamily == constant.Alpine {
+					if err := relatedDefs.addAlpineSourceDefinition(r, res.request, def); err != nil {
+						errs = append(errs, err)
+					}
+					continue
+				}
 				affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
 				if err != nil {
 					errs = append(errs, err)
@@ -345,6 +351,12 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
 		}
 		for _, def := range definitions {
+			if req.isSrcPack && ovalFamily == constant.Alpine {
+				if err := relatedDefs.addAlpineSourceDefinition(r, req, def); err != nil {
+					return relatedDefs, err
+				}
+				continue
+			}
 			affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
 			if err != nil {
 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)

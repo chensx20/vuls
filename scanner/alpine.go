@@ -105,7 +105,7 @@ func (o *alpine) scanPackages() error {
 		Version: version,
 	}
 
-	installed, err := o.scanInstalledPackages()
+	installed, srcPackages, err := o.scanInstalledPackages()
 	if err != nil {
 		o.log.Errorf("Failed to scan installed packages: %s", err)
 		return err
@@ -122,21 +122,52 @@ func (o *alpine) scanPackages() error {
 	}
 
 	o.Packages = installed
+	o.SrcPackages = srcPackages
 	return nil
 }
 
-func (o *alpine) scanInstalledPackages() (models.Packages, error) {
-	cmd := util.PrependProxyEnv("apk info -v")
+func (o *alpine) scanInstalledPackages() (models.Packages, models.SrcPackages, error) {
+	cmd := "cat /lib/apk/db/installed"
 	r := o.exec(cmd, noSudo)
 	if !r.isSuccess() {
-		return nil, xerrors.Errorf("Failed to SSH: %s", r)
+		return nil, nil, xerrors.Errorf("Failed to SSH: %s", r)
 	}
-	return o.parseApkInfo(r.Stdout)
+	return o.parseInstalledPackages(r.Stdout)
 }
 
 func (o *alpine) parseInstalledPackages(stdout string) (models.Packages, models.SrcPackages, error) {
-	installedPackages, err := o.parseApkInfo(stdout)
-	return installedPackages, nil, err
+	packages := models.Packages{}
+	sourcePackages := models.SrcPackages{}
+	for _, record := range strings.Split(stdout, "\n\n") {
+		var name, version, origin string
+		for _, line := range strings.Split(record, "\n") {
+			if len(line) < 2 || line[1] != ':' {
+				continue
+			}
+			switch line[0] {
+			case 'P':
+				name = line[2:]
+			case 'V':
+				version = line[2:]
+			case 'o':
+				origin = line[2:]
+			}
+		}
+		if name == "" || version == "" {
+			continue
+		}
+		packages[name] = models.Package{Name: name, Version: version}
+		if origin == "" {
+			continue
+		}
+		src, ok := sourcePackages[origin]
+		if !ok {
+			src = models.SrcPackage{Name: origin, Version: version}
+		}
+		src.AddBinaryName(name)
+		sourcePackages[origin] = src
+	}
+	return packages, sourcePackages, nil
 }
 
 func (o *alpine) parseApkInfo(stdout string) (models.Packages, error) {
