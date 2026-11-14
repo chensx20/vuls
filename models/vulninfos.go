@@ -539,7 +539,7 @@ func (v VulnInfo) Cvss3Scores() (values []CveContentCvss) {
 	for _, ctype := range order {
 		if conts, found := v.CveContents[ctype]; found {
 			for _, cont := range conts {
-				if cont.Cvss3Score == 0 && cont.Cvss3Severity == "" {
+				if cont.Cvss3Score == 0 && (cont.Cvss3Severity == "" || strings.HasPrefix(string(ctype), string(Trivy))) {
 					continue
 				}
 				// https://nvd.nist.gov/vuln-metrics/cvss
@@ -559,30 +559,16 @@ func (v VulnInfo) Cvss3Scores() (values []CveContentCvss) {
 	for _, ctype := range append([]CveContentType{Debian, DebianSecurityTracker, Ubuntu, UbuntuAPI, Amazon, GitHub, WpScan}, GetCveContentTypes(string(Trivy))...) {
 		if conts, found := v.CveContents[ctype]; found {
 			for _, cont := range conts {
-				if cont.Cvss3Severity != "" {
-					switch ctype {
-					case DebianSecurityTracker: // Multiple Severities(sorted) may be listed, and the largest one is used.
-						ss := strings.Split(cont.Cvss3Severity, "|")
-						values = append(values, CveContentCvss{
-							Type: ctype,
-							Value: Cvss{
-								Type:                 CVSS3,
-								Score:                severityToCvssScoreRoughly(ss[len(ss)-1]),
-								CalculatedBySeverity: true,
-								Severity:             strings.ToUpper(cont.Cvss3Severity),
-							},
-						})
-					default:
-						values = append(values, CveContentCvss{
-							Type: ctype,
-							Value: Cvss{
-								Type:                 CVSS3,
-								Score:                severityToCvssScoreRoughly(cont.Cvss3Severity),
-								CalculatedBySeverity: true,
-								Severity:             strings.ToUpper(cont.Cvss3Severity),
-							},
-						})
-					}
+				if cont.Cvss3Severity != "" && !(strings.HasPrefix(string(ctype), string(Trivy)) && cont.Cvss3Score != 0) {
+					values = append(values, CveContentCvss{
+						Type: ctype,
+						Value: Cvss{
+							Type:                 CVSS3,
+							Score:                severityToCvssScoreRoughly(cont.Cvss3Severity),
+							CalculatedBySeverity: true,
+							Severity:             strings.ToUpper(cont.Cvss3Severity),
+						},
+					})
 				}
 			}
 		}
@@ -779,17 +765,24 @@ func severityToCvssScoreRange(severity string) string {
 // Critical, High, Medium, Low, Negligible
 // https://people.canonical.com/~ubuntu-security/priority.html
 func severityToCvssScoreRoughly(severity string) float64 {
-	switch strings.ToUpper(severity) {
-	case "CRITICAL":
-		return 10.0
-	case "IMPORTANT", "HIGH":
-		return 8.9
-	case "MODERATE", "MEDIUM":
-		return 6.9
-	case "LOW", "NEGLIGIBLE":
-		return 3.9
+	maxScore := 0.0
+	for _, value := range strings.Split(severity, "|") {
+		var score float64
+		switch strings.ToUpper(value) {
+		case "CRITICAL":
+			score = 10.0
+		case "IMPORTANT", "HIGH":
+			score = 8.9
+		case "MODERATE", "MEDIUM":
+			score = 6.9
+		case "LOW", "NEGLIGIBLE":
+			score = 3.9
+		}
+		if score > maxScore {
+			maxScore = score
+		}
 	}
-	return 0
+	return maxScore
 }
 
 // FormatMaxCvssScore returns Max CVSS Score
